@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🔐 VPN Audit Dashboard</title>
+    <!-- Локальный Bootstrap -->
+    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; }
+        .clickable-username { cursor: pointer; color: #0d6efd; text-decoration: none; }
+        .clickable-username:hover { text-decoration: underline; }
+    </style>
+
+<!-- Верхняя панель с пользователем и выходом -->
+<nav class="navbar navbar-light bg-light mb-4 px-3 rounded">
+    <span class="navbar-brand mb-0 h1">🔐 VPN Audit</span>
+    <div class="d-flex align-items-center gap-3">
+        {% if current_user %}
+            <span class="text-muted small">
+                👤 {{ current_user }} 
+                {% if current_role %}
+                    <span class="badge bg-{{ 'danger' if current_role == 'admin' else 'info' }}">{{ current_role }}</span>
+                {% endif %}
+            </span>
+            <a href="/access" class="btn btn-outline-secondary btn-sm">🔐 Доступ</a>
+            <a href="/settings" class="btn btn-outline-secondary btn-sm">⚙️ Настройки</a>
+            <a href="/logout" class="btn btn-outline-secondary btn-sm">🚪 Выход</a>
+        {% endif %}
+    </div>
+</nav>
+
+</head>
+
+{# Стало (безопасная проверка): #}
+{% if configs and configs.tftp_enabled and configs.tftp_enabled.value == '1' %}
+<div class="alert alert-info py-2 mb-3">
+    📁 <strong>Лог ASA:</strong> 
+    <a href="{{ configs.tftp_log_url.value }}" target="_blank">Просмотреть</a>
+</div>
+{% endif %}
+
+
+<body class="bg-light p-4">
+<div class="container-fluid">
+    <h2 class="mb-4">🔐 Управление доступом к ВПН</h2>
+    
+    <!-- Форма добавления правила -->
+    <div class="card mb-4">
+        <div class="card-header bg-primary text-white">⏱ Установить персональный дедлайн</div>
+        <div class="card-body">
+            <form id="ruleForm" class="row g-3">
+                <div class="col-md-3">
+                    <input type="text" class="form-control" id="username" placeholder="samaccountname" required>
+                </div>
+                <div class="col-md-3">
+                    <input type="datetime-local" class="form-control" id="deadline" required>
+                </div>
+                <div class="col-md-4">
+                    <input type="text" class="form-control" id="reason" placeholder="Причина (аудитор, отпуск, VIP...)">
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-success w-100">💾 Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Поиск -->
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <input type="text" id="userSearch" class="form-control" placeholder="🔍 Поиск по username..." onkeyup="searchUsers()">
+        </div>
+    </div>
+
+    <!-- Результаты поиска (скрыты по умолчанию) -->
+    <div id="searchResults" class="list-group mb-3 d-none">
+        <!-- Заполняется JS -->
+    </div>
+
+    <button id="toggleDeletedBtn" class="btn btn-sm btn-outline-secondary mb-3">
+        👁 Показать/Скрыть уволенных
+    </button>
+
+    <!-- Таблица пользователей -->
+    <div class="card">
+        <div class="card-body table-responsive">
+            <table class="table table-hover align-middle">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Пользователь</th>
+                        <th class="text-center" width="60">🛡️</th>
+                        <th>Последняя активность</th>
+                        <th>Статус в AD</th>
+                        <th>Персональный дедлайн</th>
+                        <th>Причина</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody id="usersTable">
+                    {% for u in users %}
+                    <tr {% if u.ad_status in ['deleted', 'before_delete'] %}data-ad-status="{{ u.ad_status }}"{% endif %}>
+                        <td>
+                            <strong class="clickable-username" onclick="openUserDetails('{{ u.samaccountname }}')">
+                                {{ u.samaccountname }}
+                            </strong>
+                            {% if u.ad_status == 'deleted' %}
+                                <span class="badge bg-danger ms-2" title="Учётная запись удалена из AD">[Уволен]</span>
+                            {% elif u.ad_status == 'before_delete' %}
+                                <span class="badge bg-warning text-dark ms-2" title="Готовится к удалению">[Перед удалением]</span>
+                            {% elif u.ad_status == 'disabled' %}
+                                <span class="badge bg-secondary ms-2" title="Учётная запись отключена">[Отключён]</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-center align-middle">
+                            <input type="checkbox" class="form-check-input whitelist-toggle" 
+                                   data-username="{{ u.samaccountname }}"
+                                   {% if u.status == 'whitelisted' %}checked{% endif %}
+                                   title="Белый список: исключить из автоотключения">
+                        </td>
+
+                        <td>{{ u.last_active.strftime('%Y-%m-%d %H:%M') if u.last_active else 'Нет данных' }}</td>
+                        <td>
+                            <span class="badge bg-{{ 'success' if u.ad_group_state == 'in_group' else 'secondary' }}">
+                                {{ u.ad_group_state }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if u.custom_deadline %}
+                                {# Персональный дедлайн #}
+                                <span class="text-warning fw-bold">{{ u.custom_deadline.strftime('%Y-%m-%d %H:%M') }}</span>
+                                {% if u.custom_deadline.replace(tzinfo=None) < now %}
+                                    <span class="badge bg-danger ms-1">ИСТЁК</span>
+                                {% else %}
+                                    {% set days_left = (u.custom_deadline.replace(tzinfo=None) - now).days %}
+                                    <span class="badge bg-info ms-1">{{ days_left }} дн.</span>
+                                {% endif %}
+                            {% elif u.last_active %}
+                                {# Глобальное правило: считаем дни до отключения #}
+                                {% set days_since = (now - u.last_active).days %}
+                                {% set days_left = inactive_days - days_since %}
+                                {% if days_left <= 0 %}
+                                    <span class="badge bg-danger">⚠️ Пора отключать</span>
+                                {% elif days_left <= 7 %}
+                                    <span class="badge bg-warning text-dark">{{ days_left }} дн. до откл.</span>
+                                {% else %}
+                                    <span class="text-muted" title="Неактивен {{ days_since }} дн. из {{ inactive_days }}">
+                                        {{ days_left }} дн. до откл.
+                                    </span>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">Нет данных</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ u.reason or '-' }}</td>
+                        <td>
+                            {% if u.custom_deadline %}
+                            <button class="btn btn-sm btn-outline-danger" onclick="removeRule('{{ u.samaccountname }}')">
+                                🗑 Сбросить
+                            </button>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('ruleForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const payload = {
+        username: document.getElementById('username').value,
+        deadline: document.getElementById('deadline').value,
+        reason: document.getElementById('reason').value
+    };
+    const res = await fetch('/api/rule', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    });
+    if (res.ok) location.reload();
+    else alert('Ошибка: ' + (await res.json()).error);
+});
+
+async function removeRule(username) {
+    if (!confirm(`Сбросить персональный дедлайн для ${username}?`)) return;
+    await fetch(`/api/rule/${username}`, { method: 'DELETE' });
+    location.reload();
+}
+</script>
+
+<!-- Modal: Детали пользователя -->
+<div class="modal fade" id="userModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">📊 <span id="modalUsername"></span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <!-- Вкладка: Статистика по месяцам -->
+        <ul class="nav nav-tabs mb-3" id="userTabs">
+            <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tab-stats">📈 По месяцам</a></li>
+            <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-recent">🕐 Последние сессии</a></li>
+            <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-ips">🌐 IP-адреса</a></li>
+        </ul>
+        
+        <div class="tab-content">
+            <!-- Статистика -->
+            <div class="tab-pane fade show active" id="tab-stats">
+                <table class="table table-sm">
+                    <thead><tr><th>Месяц</th><th>Сессий</th><th>Часов</th><th>Среднее/сессия</th></tr></thead>
+                    <tbody id="statsBody"></tbody>
+                </table>
+            </div>
+            
+            <!-- Последние сессии -->
+            <div class="tab-pane fade" id="tab-recent">
+                <table class="table table-sm">
+                    <thead><tr><th>Начало</th><th>Конец</th><th>Длит. (мин)</th><th>Внешний IP</th><th>VPN IP</th></tr></thead>
+                    <tbody id="recentBody"></tbody>
+                </table>
+            </div>
+            
+            <!-- IP адреса -->
+            <div class="tab-pane fade" id="tab-ips">
+                <div><strong>Внешние IP:</strong> <span id="extIps" class="text-muted">Загрузка...</span></div>
+                <div class="mt-2"><strong>Выданные VPN IP:</strong> <span id="vpnIps" class="text-muted">Загрузка...</span></div>
+            </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button>
+        <button class="btn btn-outline-primary" onclick="exportUserCSV()">📥 Экспорт CSV</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
+<script>
+let currentUsername = null;
+const modal = new bootstrap.Modal(document.getElementById('userModal'));
+
+// Поиск пользователей
+async function searchUsers() {
+    const q = document.getElementById('userSearch').value.trim();
+    const resultsDiv = document.getElementById('searchResults');
+    
+    if (q.length < 2) {
+        resultsDiv.classList.add('d-none');
+        return;
+    }
+    
+    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    const users = await res.json();
+    
+    if (users.length === 0) {
+        resultsDiv.innerHTML = '<div class="list-group-item text-muted">Ничего не найдено</div>';
+    } else {
+        resultsDiv.innerHTML = users.map(u => `
+            <button class="list-group-item list-group-item-action d-flex justify-content-between"
+                    onclick="openUserDetails('${u.username}')">
+                <strong>${u.username}</strong>
+                <small class="text-muted">${u.last_active || 'Нет данных'}</small>
+            </button>
+        `).join('');
+    }
+    resultsDiv.classList.remove('d-none');
+}
+
+// Открытие деталей пользователя
+async function openUserDetails(username) {
+    currentUsername = username;
+    document.getElementById('modalUsername').textContent = username;
+    document.getElementById('userSearch').value = '';
+    document.getElementById('searchResults').classList.add('d-none');
+    
+    // Загрузка статистики по месяцам
+    const statsRes = await fetch(`/api/user/${username}/stats`);
+    const stats = await statsRes.json();
+    document.getElementById('statsBody').innerHTML = stats.map(s => `
+        <tr>
+            <td>${s.month}</td>
+            <td>${s.sessions}</td>
+            <td>${s.hours} ч</td>
+            <td>${s.sessions > 0 ? (s.hours / s.sessions).toFixed(1) : 0} ч</td>
+        </tr>
+    `).join('') || '<tr><td colspan="4" class="text-muted">Нет данных</td></tr>';
+    
+    // Загрузка последних сессий
+    const recentRes = await fetch(`/api/user/${username}/recent`);
+    const recent = await recentRes.json();
+    document.getElementById('recentBody').innerHTML = recent.map(r => `
+        <tr>
+            <td>${r.start}</td>
+            <td>${r.end}</td>
+            <td>${r.duration_min}</td>
+            <td>${r.src_ip}</td>
+            <td>${r.vpn_ip || '-'}</td>
+        </tr>
+    `).join('') || '<tr><td colspan="5" class="text-muted">Нет сессий</td></tr>';
+    
+    // IP-адреса (берём из первой записи статистики или агрегируем)
+    const allExtIps = [...new Set(stats.flatMap(s => s.external_ips))].filter(Boolean);
+    const allVpnIps = [...new Set(stats.flatMap(s => s.vpn_ips))].filter(Boolean);
+    document.getElementById('extIps').textContent = allExtIps.join(', ') || 'Нет данных';
+    document.getElementById('vpnIps').textContent = allVpnIps.join(', ') || 'Нет данных';
+    
+    modal.show();
+}
+
+// Экспорт в CSV
+function exportUserCSV() {
+    if (!currentUsername) return;
+    window.location.href = `/api/user/${currentUsername}/export`;
+}
+
+// Закрытие модального окна по клику вне
+document.getElementById('userModal').addEventListener('hidden.bs.modal', () => {
+    currentUsername = null;
+});
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.whitelist-toggle').forEach(cb => {
+        cb.addEventListener('change', async function() {
+            const originalState = this.checked;
+            const username = this.dataset.username;
+            const spinner = this;
+            spinner.disabled = true;
+
+            try {
+                const res = await fetch('/api/toggle_whitelist', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ username })
+                });
+                const data = await res.json();
+                
+                if (!res.ok || !data.success) {
+                    spinner.checked = !originalState; // Откат при ошибке
+                    alert('Ошибка: ' + (data.error || 'Не удалось обновить статус'));
+                } else {
+                    // Меняем цвет чекбокса для наглядности
+                    spinner.classList.toggle('bg-success', data.new_status === 'whitelisted');
+                }
+            } catch (e) {
+                spinner.checked = !originalState;
+                alert('Ошибка сети или сервера');
+            } finally {
+                spinner.disabled = false;
+            }
+        });
+    });
+});
+</script>
+
+<script>
+document.getElementById('toggleDeletedBtn').addEventListener('click', function() {
+    const rows = document.querySelectorAll('tr[data-ad-status="deleted"], tr[data-ad-status="before_delete"]');
+    const isHidden = rows.length > 0 && rows[0].style.display === 'none';
+    rows.forEach(row => row.style.display = isHidden ? '' : 'none');
+    this.textContent = isHidden ? '👁 Скрыть уволенных' : '👁 Показать уволенных';
+});
+</script>
+
+
+</body>
+</html>

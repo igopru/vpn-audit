@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚙️ Настройки — VPN Audit</title>
+    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; }
+        .section-title { border-bottom: 2px solid #e9ecef; padding-bottom: 0.5rem; margin: 1.5rem 0 1rem; }
+    </style>
+</head>
+<body class="bg-light p-4">
+
+<!-- 🔥 Верхняя панель с пользователем и выходом -->
+{% if current_user %}
+<nav class="navbar navbar-light bg-white border rounded mb-4 px-3 shadow-sm">
+    <span class="navbar-brand mb-0 h5">⚙️ Настройки</span>
+    <div class="d-flex align-items-center gap-3">
+        <small class="text-muted">
+            👤 {{ current_user }}
+            {% if current_role %}
+            <span class="badge bg-{{ 'danger' if current_role == 'admin' else 'secondary' }} ms-1">
+                {{ current_role }}
+            </span>
+            {% endif %}
+        </small>
+        <a href="/logout" class="btn btn-outline-danger btn-sm">🚪 Выход</a>
+    </div>
+</nav>
+{% endif %}
+
+<div class="container" style="max-width: 800px;">
+    
+    <div class="alert alert-warning">
+        ⚠️ <strong>Внимание:</strong> Пароли хранятся в БД в открытом виде. 
+        Используйте доступ к настройкам только во внутренней защищённой сети!
+    </div>
+
+    <form id="configForm">
+        
+        <!-- === Авторизация === -->
+        <h5 class="section-title text-primary">🔐 Авторизация (AD)</h5>
+        
+        <div class="mb-3">
+            <label class="form-label fw-bold">auth_enabled</label>
+            <small class="text-muted d-block mb-1">Включить проверку доступа (0/1)</small>
+            <select class="form-select" data-key="auth_enabled">
+                <option value="1" {{ 'selected' if configs.get('auth_enabled', {}).get('value') == '1' else '' }}>Включено</option>
+                <option value="0" {{ 'selected' if configs.get('auth_enabled', {}).get('value') == '0' else '' }}>Отключено (только для отладки!)</option>
+            </select>
+        </div>
+        
+        <div class="mb-3">
+            <label class="form-label fw-bold">auth_ad_server</label>
+            <small class="text-muted d-block mb-1">LDAP сервер (ldap://...)</small>
+            <input type="text" class="form-control" data-key="auth_ad_server" 
+                   value="{{ configs.get('auth_ad_server', {}).get('value', '') }}">
+        </div>
+        
+        <div class="mb-3">
+            <label class="form-label fw-bold">auth_ad_bind_dn</label>
+            <small class="text-muted d-block mb-1">DN сервисной учётки</small>
+            <input type="text" class="form-control" data-key="auth_ad_bind_dn" 
+                   value="{{ configs.get('auth_ad_bind_dn', {}).get('value', '') }}">
+        </div>
+        
+        <div class="mb-3">
+            <label class="form-label fw-bold">auth_ad_bind_password</label>
+            <small class="text-muted d-block mb-1">Пароль сервисной учётки</small>
+            <input type="password" class="form-control" data-key="auth_ad_bind_password" 
+                   value="{{ configs.get('auth_ad_bind_password', {}).get('value', '') }}" placeholder="••••••••">
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label fw-bold">auth_ad_user_search_base</label>
+            <small class="text-muted d-block mb-1">Base DN для поиска (напр. DC=domain,DC=ru)</small>
+            <input type="text" class="form-control" data-key="auth_ad_user_search_base" 
+                   value="{{ configs.get('auth_ad_user_search_base', {}).get('value', '') }}">
+        </div>
+        
+        <!-- === Правила VPN === -->
+        <h5 class="section-title text-primary">🔐 Правила доступа</h5>
+        
+        <div class="mb-3">
+            <label class="form-label fw-bold">vpn_inactive_days</label>
+            <small class="text-muted d-block mb-1">Порог неактивности (дни)</small>
+            <input type="number" class="form-control" data-key="vpn_inactive_days" 
+                   value="{{ configs.get('vpn_inactive_days', {}).get('value', '30') }}">
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label fw-bold">vpn_group_dn</label>
+            <small class="text-muted d-block mb-1">DN группы доступа (для автоматизации)</small>
+            <input type="text" class="form-control" data-key="vpn_group_dn" 
+                   value="{{ configs.get('vpn_group_dn', {}).get('value', '') }}">
+        </div>
+        
+        <!-- === Логи / TFTP === -->
+        <h5 class="section-title text-primary">📁 Логи и TFTP</h5>
+        
+        <div class="mb-3">
+            <label class="form-label fw-bold">tftp_enabled</label>
+            <small class="text-muted d-block mb-1">Показывать ссылку на лог в дашборде</small>
+            <select class="form-select" data-key="tftp_enabled">
+                <option value="1" {{ 'selected' if configs.get('tftp_enabled', {}).get('value') == '1' else '' }}>Показывать</option>
+                <option value="0" {{ 'selected' if configs.get('tftp_enabled', {}).get('value') == '0' else '' }}>Скрыть</option>
+            </select>
+        </div>
+        
+        <div class="mb-3">
+            <label class="form-label fw-bold">tftp_log_path</label>
+            <small class="text-muted d-block mb-1">Путь на сервере (для парсера)</small>
+            <input type="text" class="form-control" data-key="tftp_log_path" 
+                   value="{{ configs.get('tftp_log_path', {}).get('value', '') }}">
+        </div>
+        
+        <div class="mb-3">
+            <label class="form-label fw-bold">tftp_log_url</label>
+            <small class="text-muted d-block mb-1">URL для просмотра в браузере</small>
+            <input type="text" class="form-control" data-key="tftp_log_url" 
+                   value="{{ configs.get('tftp_log_url', {}).get('value', '') }}">
+        </div>
+
+        <!-- === Email === -->
+        <h5 class="section-title text-primary">📧 Email уведомления</h5>
+        
+        <div class="mb-3">
+            <label class="form-label fw-bold">email_enabled</label>
+            <select class="form-select" data-key="email_enabled">
+                <option value="1" {{ 'selected' if configs.get('email_enabled', {}).get('value') == '1' else '' }}>Включено</option>
+                <option value="0" {{ 'selected' if configs.get('email_enabled', {}).get('value') == '0' else '' }}>Отключено</option>
+            </select>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label fw-bold">email_from</label>
+            <input type="email" class="form-control" data-key="email_from" 
+                   value="{{ configs.get('email_from', {}).get('value', '') }}">
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label fw-bold">smtp_server</label>
+            <input type="text" class="form-control" data-key="smtp_server" 
+                   value="{{ configs.get('smtp_server', {}).get('value', '') }}">
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label fw-bold">smtp_port</label>
+            <input type="number" class="form-control" data-key="smtp_port" 
+                   value="{{ configs.get('smtp_port', {}).get('value', '25') }}">
+        </div>
+        
+        <!-- Кнопки управления -->
+        <div class="mt-5 pt-3 border-top d-flex gap-2 justify-content-end">
+            <a href="/" class="btn btn-secondary btn-lg">← Назад</a>
+            <a href="/logout" class="btn btn-outline-danger btn-lg">🚪 Выход</a>
+            <button type="submit" class="btn btn-primary btn-lg">💾 Сохранить настройки</button>
+        </div>
+    </form>
+</div>
+
+<script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
+<script>
+document.getElementById('configForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const btn = e.target.querySelector('button[type="submit"]');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Сохранение...';
+    
+    const inputs = document.querySelectorAll('#configForm input[data-key], #configForm select[data-key]');
+    let successCount = 0;
+    
+    for (const input of inputs) {
+        const key = input.dataset.key;
+        const value = input.value;
+        
+        // Не отправляем пустой пароль, если он не менялся (опционально)
+        // if (key.includes('password') && value === '') continue;
+        
+        try {
+            const res = await fetch('/api/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({key, value})
+            });
+            if (res.ok) successCount++;
+        } catch(err) {
+            console.error('Error saving', key, err);
+        }
+    }
+    
+    btn.disabled = false;
+    btn.innerHTML = originalText;
+    
+    if (successCount > 0) {
+        alert(`✅ Сохранено настроек: ${successCount}\n\nПерезапустите ad_sync.py для применения изменений.`);
+    } else {
+        alert('⚠️ Не удалось сохранить настройки. Проверьте консоль сервера.');
+    }
+});
+</script>
+</body>
+</html>

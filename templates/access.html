@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>👥 Управление доступом — VPN Audit</title>
+    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
+</head>
+<body class="p-4">
+
+<!-- Верхняя панель с пользователем и выходом -->
+<nav class="navbar navbar-light bg-light mb-4 px-3 rounded">
+    <span class="navbar-brand mb-0 h1">🔐 VPN Audit</span>
+    <div class="d-flex align-items-center gap-3">
+        {% if current_user %}
+            <span class="text-muted small">
+                👤 {{ current_user }} 
+                {% if current_role %}
+                    <span class="badge bg-{{ 'danger' if current_role == 'admin' else 'info' }}">{{ current_role }}</span>
+                {% endif %}
+            </span>
+            <a href="/logout" class="btn btn-outline-secondary btn-sm">🚪 Выход</a>
+        {% endif %}
+    </div>
+</nav>
+
+<div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>👥 Управление доступом</h2>
+        <a href="/" class="btn btn-secondary">← Назад</a>
+    </div>
+    
+    <!-- Форма выдачи доступа -->
+    <div class="card mb-4">
+        <div class="card-header bg-primary text-white">➕ Выдать доступ</div>
+        <div class="card-body">
+            <form id="grantForm" class="row g-3">
+                <div class="col-md-4">
+                    <input type="text" class="form-control" id="grantUsername" placeholder="sAMAccountName" required>
+                </div>
+                <div class="col-md-3">
+                    <select class="form-select" id="grantRole">
+                        <option value="viewer">👁️ Просмотр</option>
+                        <option value="auditor">📊 Аудитор</option>
+                        <option value="admin">⚙️ Администратор</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-success w-100">✅ Выдать</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Таблица пользователей с доступом -->
+    <div class="card">
+        <div class="card-body table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>Пользователь</th>
+                        <th>Роль</th>
+                        <th>Выдал</th>
+                        <th>Дата выдачи</th>
+                        <th>Последний вход</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in users %}
+                    <tr>
+                        <td><strong>{{ u.samaccountname }}</strong></td>
+                        <td>
+                            <span class="badge bg-{{ 'danger' if u.role == 'admin' else 'info' if u.role == 'auditor' else 'secondary' }}">
+                                {{ u.role }}
+                            </span>
+                        </td>
+                        <td>{{ u.granted_by }}</td>
+                        <td>{{ u.granted_at.strftime('%Y-%m-%d') }}</td>
+                        <td>{{ u.last_login.strftime('%Y-%m-%d %H:%M') if u.last_login else '—' }}</td>
+                        <td>
+                            {% if u.samaccountname != current_user %}
+                            <button class="btn btn-sm btn-outline-danger" 
+                                    onclick="revokeAccess('{{ u.samaccountname }}')">
+                                🗑 Отозвать
+                            </button>
+                            {% else %}
+                            <small class="text-muted">Вы</small>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
+<script>
+document.getElementById('grantForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const res = await fetch('/api/access', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            username: document.getElementById('grantUsername').value,
+            role: document.getElementById('grantRole').value
+        })
+    });
+    if (res.ok) location.reload();
+    else alert('Ошибка: ' + (await res.json()).error);
+});
+
+async function revokeAccess(username) {
+    if (!confirm(`Отозвать доступ у ${username}?`)) return;
+    await fetch(`/api/access/${username}`, { method: 'DELETE' });
+    location.reload();
+}
+</script>
+</body>
+</html>
