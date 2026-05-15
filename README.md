@@ -2,8 +2,6 @@
 A self-hosted solution for monitoring corporate VPN usage, automatically managing Active Directory group membership based on inactivity, and sending email notifications. Built with Python, Flask, MySQL, and LDAP.
 ✅ Production-ready | 🔒 Security-first | 📧 Email notifications | 🌐 Role-based Web UI
 
-
-
 ## 📋 Features
 
 - 📡 **Cisco ASA Syslog Parsing** – Dual-format support (legacy & standard rsyslog), automatic deduplication, timezone-aware timestamps
@@ -19,9 +17,7 @@ A self-hosted solution for monitoring corporate VPN usage, automatically managin
 
 ## 🏗 Architecture
 
-
-
-Cisco ASA ──UDP 514──▶ rsyslog ──▶ /opt/vpn-audit/logs/syslog.log
+`Cisco ASA ──UDP 514──▶ rsyslog ──▶ /opt/vpn-audit/logs/syslog.log
                                       │
                                       ▼
                                parser.py (cron */15)
@@ -35,9 +31,7 @@ Cisco ASA ──UDP 514──▶ rsyslog ──▶ /opt/vpn-audit/logs/syslog.lo
                  │                    │                    │
                  ▼                    ▼                    ▼
           AD Group Update      Dashboard / Reports     Audit CSV Export
-          Email Notifications  Role Management        Clean-up Candidates
-
-
+          Email Notifications  Role Management        Clean-up Candidates`
 
 ## ⚙️ Requirements
 
@@ -54,23 +48,23 @@ Cisco ASA ──UDP 514──▶ rsyslog ──▶ /opt/vpn-audit/logs/syslog.lo
 # 1. Clone & enter
 
     git clone https://github.com/YOUR_ORG/vpn-audit.git
-
+    
     cd vpn-audit
 
 # 2. Virtual environment & dependencies
 
     python3 -m venv venv
-
+    
     source venv/bin/activate
-
+    
     pip install -r requirements.txt
 
 # 3. Configure secrets
 
     cp .env.example .env
-
+    
     chmod 600 .env
-
+    
     nano .env  # ← Fill in your DB, LDAP, SMTP, and SECRET_KEY
 
 # 4. Create database
@@ -87,13 +81,9 @@ EXIT;
 
     python parser.py
 
-
-
 ### 🗄 Database Schema
 
 The application expects the following core tables. You can create them manually or import `docs/schema.sql` (provided in the repo):
-
-
 
 CREATE TABLE vpn_users (
   samaccountname VARCHAR(255) PRIMARY KEY,
@@ -127,18 +117,14 @@ CREATE TABLE vpn_sessions (
 ### 🔹 Development
 
     source venv/bin/activate
-
+    
     export FLASK_DEBUG=1
-
+    
     python app.py
 
  → http://localhost:5010
 
-
-
 ### 🔹 Production (systemd)
-
-
 
 # /etc/systemd/system/vpn-audit-web.service
 
@@ -157,21 +143,15 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 
-
-
     sudo systemctl daemon-reload
-
+    
     sudo systemctl enable --now vpn-audit-web
-
-
 
 ## 📅 Automation (Cron & Logrotate)
 
 ### 🔹 Parser (every 15 min)
 
 */15 * * * * cd /opt/vpn-audit && /opt/vpn-audit/venv/bin/python parser.py >> /var/log/vpn-audit/parser.log 2>&1
-
-
 
 ### 🔹 AD Sync (daily at 09:00, Mon-Fri)
 
@@ -194,8 +174,6 @@ WantedBy=multi-user.target
         /bin/kill -HUP $(cat /var/run/rsyslogd.pid 2>/dev/null || pgrep rsyslogd) 2>/dev/null || true
     endscript
 }
-
-
 
 ## 🔑 Configuration Variables (`.env`)
 
@@ -225,15 +203,15 @@ WantedBy=multi-user.target
 ## 🧪 Testing & Validation
 
 1. Test email delivery (redirects to EMAIL_TEST_OVERRIDE)
-
+   
     python test_email.py
 
 2. Dry-run sync (no AD changes, emails go to override address)
-
+   
     VPN_DRY_RUN=1 python ad_sync.py
 
 3. Find AD group members with zero VPN logins
-
+   
        python scripts/find_never_connected.py
 
 | Issue                                                              | Solution                                                                        |
