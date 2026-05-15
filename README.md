@@ -17,7 +17,8 @@ A self-hosted solution for monitoring corporate VPN usage, automatically managin
 
 ## 🏗 Architecture
 
-`Cisco ASA ──UDP 514──▶ rsyslog ──▶ /opt/vpn-audit/logs/syslog.log
+```text
+Cisco ASA ──UDP 514──▶ rsyslog ──▶ /opt/vpn-audit/logs/syslog.log
                                       │
                                       ▼
                                parser.py (cron */15)
@@ -31,7 +32,8 @@ A self-hosted solution for monitoring corporate VPN usage, automatically managin
                  │                    │                    │
                  ▼                    ▼                    ▼
           AD Group Update      Dashboard / Reports     Audit CSV Export
-          Email Notifications  Role Management        Clean-up Candidates`
+          Email Notifications  Role Management        Clean-up Candidates
+```
 
 ## ⚙️ Requirements
 
@@ -229,3 +231,7 @@ WantedBy=multi-user.target
 ---
 
 > 💡 **Need help?** Open an Issue with your environment details, logs, and `.env.example` (redacted). Contributions and security audits are welcome. 🛡️✨
+
+```
+
+```
