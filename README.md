@@ -73,11 +73,15 @@ Cisco ASA ──UDP 514──▶ rsyslog ──▶ /opt/vpn-audit/logs/syslog.lo
 
     mysql -u root -p
 
-CREATE DATABASE vpn_audit CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'vpn_audit'@'localhost' IDENTIFIED BY 'your_strong_password';
-GRANT ALL PRIVILEGES ON vpn_audit.* TO 'vpn_audit'@'localhost';
-FLUSH PRIVILEGES;
-EXIT;
+    CREATE DATABASE vpn_audit CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+    CREATE USER 'vpn_audit'@'localhost' IDENTIFIED BY 'your_strong_password';
+
+    GRANT ALL PRIVILEGES ON vpn_audit.* TO 'vpn_audit'@'localhost';
+
+    FLUSH PRIVILEGES;
+
+    EXIT;
 
 # 5. Run initial parser (if historical logs exist)
 
@@ -87,31 +91,54 @@ EXIT;
 
 The application expects the following core tables. You can create them manually or import `docs/schema.sql` (provided in the repo):
 
-CREATE TABLE vpn_users (
-  samaccountname VARCHAR(255) PRIMARY KEY,
-  last_active DATETIME NULL,
-  status VARCHAR(50) DEFAULT 'active',
-  ad_status ENUM('active','disabled','before_delete','deleted') DEFAULT 'active',
-  ad_group_state VARCHAR(50) DEFAULT 'in_group',
-  warned_at DATETIME NULL,
-  disconnected_at DATETIME NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
+    CREATE TABLE vpn_users (
 
-CREATE TABLE vpn_sessions (
-  id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  username VARCHAR(255),
-  src_ip VARCHAR(45),
-  assigned_vpn_ip VARCHAR(45),
-  start_time DATETIME,
-  end_time DATETIME NULL,
-  duration_sec INT GENERATED ALWAYS AS (TIMESTAMPDIFF(SECOND, start_time, COALESCE(end_time, start_time))) STORED,
-  status VARCHAR(20) DEFAULT 'active',
-  UNIQUE KEY uk_session (username, src_ip, start_time),
-  INDEX idx_user (username),
-  INDEX idx_start (start_time)
-);
+    samaccountname VARCHAR(255) PRIMARY KEY,
+
+    last_active DATETIME NULL,
+
+    status VARCHAR(50) DEFAULT 'active',
+
+    ad_status ENUM('active','disabled','before_delete','deleted') DEFAULT 'active',
+
+    ad_group_state VARCHAR(50) DEFAULT 'in_group',
+
+    warned_at DATETIME NULL,
+
+    disconnected_at DATETIME NULL,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+
+    );
+
+    CREATE TABLE vpn_sessions (
+
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+
+    username VARCHAR(255),
+
+    src_ip VARCHAR(45),
+
+    assigned_vpn_ip VARCHAR(45),
+
+    start_time DATETIME,
+
+    end_time DATETIME NULL,
+
+    duration_sec INT GENERATED ALWAYS AS (TIMESTAMPDIFF(SECOND, start_time, COALESCE(end_time, start_time))) STORED,
+
+    status VARCHAR(20) DEFAULT 'active',
+
+    UNIQUE KEY uk_session (username, src_ip, start_time),
+
+    INDEX idx_user (username),
+
+    INDEX idx_start (start_time)
+
+    );
+
 -- Additional tables: vpn_access_roles, vpn_user_rules, audit_log
 
 ## ⚡ Running the Application
