@@ -64,28 +64,27 @@ python parser.py
 0 * * * * cd /opt/vpn-audit && venv/bin/python sync_ad_group_state.py >> /var/log/vpn-audit/group_sync.log 2>&1
 ```
 
-###⚙️ Configuration (.env)
+## ⚙️ Configuration (.env)
 
-Variable | Description | Default
-VPN_DRY_RUN | 1 = safe mode (no AD changes), 0 = production | 1
-EMAIL_TEST_OVERRIDE | Redirect all emails to one address (for testing) | (empty)
-LDAP_SERVER | AD controller URL | ldap://dc1.example.com
-LDAP_GROUP_DN | DN of the VPN access group | CN=VPN-Access,OU=SecurityGroups,DC=example,DC=com
-VPN_INACTIVE_DAYS | Days before disconnection | 31
-⚠️ Never commit .env to Git! Use .env.example as a template.
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `VPN_DRY_RUN` | `1` = safe mode (no AD changes), `0` = production | `1` |
+| `EMAIL_TEST_OVERRIDE` | Redirect all emails to one address (for testing) | *(empty)* |
+| `LDAP_SERVER` | AD controller URL | `ldap://dc1.example.com` |
+| `LDAP_GROUP_DN` | DN of the VPN access group | `CN=VPN-Access,OU=SecurityGroups,DC=example,DC=com` |
+| `VPN_INACTIVE_DAYS` | Days before disconnection | `31` |
 
-🛡 Security Best Practices
-Minimal LDAP permissions – Service account needs only Read on users and Write on memberOf for the target group.
-Always start with VPN_DRY_RUN=1 – Review logs before switching to production.
-Anti-spam protection – warned_at / disconnected_at columns prevent duplicate emails.
-Isolated errors – One problematic user won't stop the batch processing.
-🆘 Troubleshooting
+> ⚠️ **Never commit `.env` to Git!** Use `.env.example` as a template.
 
-Issue | Solution
-Emails not sending | Check SMTP_* in .env, spam folder, port 587 availability
-ldapsearch not found | Install: sudo apt install ldap-utils
-Negative durations in DB | Run: ALTER TABLE vpn_sessions DROP COLUMN duration_sec, ADD COLUMN duration_sec INT GENERATED ALWAYS AS (GREATEST(0, TIMESTAMPDIFF(SECOND, start_time, COALESCE(end_time, start_time)))) STORED;
-Users not hiding in UI | Ensure sync_ad_group_state.py runs and CSS has tr[data-user-state="historical"] { display: none; }
+## 🆘 Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Emails not sending | Check `SMTP_*` in `.env`, spam folder, port 587 availability |
+| `ldapsearch` not found | Install: `sudo apt install ldap-utils` |
+| Negative durations in DB | Run the `ALTER TABLE ... GREATEST(0, ...)` SQL command (see docs) |
+| Users not hiding in UI | Ensure `sync_ad_group_state.py` runs and CSS has `tr[data-user-state="historical"] { display: none; }` |
+
 
 📜 License
 MIT License – Free for internal and commercial use.
