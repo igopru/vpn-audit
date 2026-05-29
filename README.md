@@ -1,157 +1,83 @@
-# 🔐 VPN Audit System
+# 🔐 VPN Audit & AD Sync System
 
-Инструмент для аудита, мониторинга и автоматического управления доступом к Cisco AnyConnect VPN.
-Собирает логи с firewall (Cisco ASA), хранит историю сессий в MySQL и позволяет гибко управлять доступом пользователей через веб-интерфейс с авторизацией по AD.
+> **Production-ready solution** for monitoring corporate VPN usage, automatically managing Active Directory group membership based on inactivity, and sending email notifications.
 
-## ✨ Возможности
+## ✨ Features
 
-- **📊 Сбор логов:** Парсинг логов Cisco ASA (AnyConnect) с помощью `rsyslog`.
-- **📈 Аналитика:** Статистика по месяцам, часы активности, IP-адреса.
-- **🛡 Управление доступом:**
-  - Автоматическое исключение неактивных пользователей из AD-группы.
-  - Гибкие таймеры: глобальный порог (напр. 30 дней) и персональные исключения (VIP, отпуск, аудиторы).
-- **🔐 Безопасность:**
-  - Авторизация по Active Directory (ролевой доступ: admin, auditor, viewer).
-  - Защита от несанкционированного доступа к настройкам.
-- **📤 Экспорт:** Выгрузка статистики пользователя в CSV.
-- **🐳 Docker:** Готов к развёртыванию в контейнерах.
+- 📡 **Cisco ASA Syslog Parsing** – Dual-format support, automatic deduplication, timezone-aware timestamps
+- 🔄 **AD Group Synchronization** – Removes users from VPN access group after configurable inactivity (24/31 days logic)
+- 📧 **Smart Email Notifications** – Warning at day 24, final notice at day 31, anti-spam flags
+- 🛡 **Dry-Run Mode** – Test all logic safely before touching Active Directory
+- 👥 **Custom Deadlines & Whitelists** – Grace periods for auditors, contractors, or VIPs
+- 📊 **Web Dashboard** – Flask + Bootstrap, role-based access, session analytics, CSV export
+- 🔍 **Never-Connected Detector** – Finds AD group members with zero login history
+- 🔒 **Security** – LDAP injection protection, parameterized SQL queries, `.env`-driven secrets
 
-## 🚀 Быстрый старт
+## 🚀 Quick Start
 
-### 1. Предварительные требования
-- Linux (Debian/Ubuntu/CentOS)
+### 1. Prerequisites
 - Python 3.10+
-- MySQL 8.0+
-- Active Directory (для авторизации и управления группами)
+- MySQL 8.0 / MariaDB 10.5+
+- `rsyslog` + `ldap-utils` (for ldapsearch)
+- Active Directory access
 
-### 2. Установка из исходников
+### 2. Installation
+```bash
+# Clone & enter
+git clone https://github.com/igopru/vpn-audit.git
+cd vpn-audit
 
-# Клонирование или копирование файлов
-```bash
-cd /opt/vpn-audit
-```
-# Виртуальное окружение
-```bash
+# Virtual environment
 python3 -m venv venv
 source venv/bin/activate
-```
-
-# Установка зависимостей
-```bash
 pip install -r requirements.txt
-```
 
-# Создание базы данных и пользователя (запрос пароля будет)
-```bash
-mysql -u root -p < db_schema.sql
-```
-
-# Настройка конфигурации
-```bash
+# Configure secrets
 cp .env.example .env
-```
+chmod 600 .env
+nano .env  # ← Fill in your DB, LDAP, SMTP settings
 
-# Отредактируйте .env: введите пароли БД и AD
-```bash
-nano .env
-```
+# Create database
+mysql -u root -p < docs/schema.sql
 
-### 3. Настройка логов (rsyslog)
-На сервере, где крутится приложение:
-```bash
-# /etc/rsyslog.d/99-remote.conf
-module(load="imudp")
-input(type="imudp" port="514")
-:fromhost-ip, !isequal, "127.0.0.1" /opt/vpn-audit/logs/syslog.log
-```
-
-Перезагрузите rsyslog: systemctl restart rsyslog.
-
-### 4. Запуск сервиса
-
-# Парсер логов 
-```bash
-(добавить в crontab: */15 * * * * /path/to/venv/bin/python parser.py)
-```
-
-```bash
+# Initial parse (if historical logs exist)
 python parser.py
+
+# 3. Automation (Cron)
+
+```text
+# Parser: every 15 min (or daily at 08:45)
+45 8 * * * cd /opt/vpn-audit && venv/bin/python parser.py >> /var/log/vpn-audit/parser.log 2>&1
+
+# AD Sync: Mon-Fri at 09:00
+0 9 * * 1-5 cd /opt/vpn-audit && venv/bin/python ad_sync.py >> /var/log/vpn-audit/sync.log 2>&1
+
+# Group status sync: hourly (for accurate UI)
+0 * * * * cd /opt/vpn-audit && venv/bin/python sync_ad_group_state.py >> /var/log/vpn-audit/group_sync.log 2>&1
 ```
 
-# Веб-сервер
-```bash
-gunicorn --bind 0.0.0.0:8000 app:app
-```
+###⚙️ Configuration (.env)
 
-### 🐳 Docker (Docker Compose)
-Для быстрого развёртывания используйте docker-compose:
+Variable | Description | Default
+VPN_DRY_RUN | 1 = safe mode (no AD changes), 0 = production | 1
+EMAIL_TEST_OVERRIDE | Redirect all emails to one address (for testing) | (empty)
+LDAP_SERVER | AD controller URL | ldap://dc1.example.com
+LDAP_GROUP_DN | DN of the VPN access group | CN=VPN-Access,OU=SecurityGroups,DC=example,DC=com
+VPN_INACTIVE_DAYS | Days before disconnection | 31
+⚠️ Never commit .env to Git! Use .env.example as a template.
 
-# Создайте директорию для логов и данных
-```bash
-mkdir -p logs data
-```
+🛡 Security Best Practices
+Minimal LDAP permissions – Service account needs only Read on users and Write on memberOf for the target group.
+Always start with VPN_DRY_RUN=1 – Review logs before switching to production.
+Anti-spam protection – warned_at / disconnected_at columns prevent duplicate emails.
+Isolated errors – One problematic user won't stop the batch processing.
+🆘 Troubleshooting
 
-# Запуск
-```bash
-docker-compose up -d
-```
+Issue | Solution
+Emails not sending | Check SMTP_* in .env, spam folder, port 587 availability
+ldapsearch not found | Install: sudo apt install ldap-utils
+Negative durations in DB | Run: ALTER TABLE vpn_sessions DROP COLUMN duration_sec, ADD COLUMN duration_sec INT GENERATED ALWAYS AS (GREATEST(0, TIMESTAMPDIFF(SECOND, start_time, COALESCE(end_time, start_time)))) STORED;
+Users not hiding in UI | Ensure sync_ad_group_state.py runs and CSS has tr[data-user-state="historical"] { display: none; }
 
-Контейнер ожидает, что логи будут писать в папку ./logs на хост-машине.
-
-### ⚙️ Конфигурация
-Основные настройки находятся в файле .env:
-DB_*: Параметры подключения к MySQL.
-AUTH_AD_*: Параметры подключения к AD (сервер, учётка, OU).
-VPN_*: Путь к логом, DN группы доступа.
-🛡 Развертывание в Production
-Рекомендуется поставить Nginx как реверс-прокси:
-```bash
-server {
-    listen 80;
-    server_name vpn-audit.local;
-
-    location / {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
-
-### 📜 Лицензия
-MIT License. Свободно для использования во внутренних сетях.
-
-
----
-
-### 🐳 2. Файл `Dockerfile`
-Создайте его в корне `/opt/vpn-audit/Dockerfile`. Он настроит среду для приложения.
-
-```dockerfile
-# Базовый образ Python
-FROM python:3.10-slim
-```
-
-# Рабочая директория
-WORKDIR /app
-
-# Копируем зависимости и устанавливаем их
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Копируем весь код приложения
-COPY . .
-
-# Создаем пользователя (для безопасности)
-```bash
-RUN useradd -m vpnuser && chown -R vpnuser:vpnuser /app
-USER vpnuser
-```
-
-# Экспонируем порт для Gunicorn
-EXPOSE 8000
-
-# Команда запуска
-```bash
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "app:app"]
-```
+📜 License
+MIT License – Free for internal and commercial use.
