@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
 """
 Синхронизация VPN + AD с почтовыми оповещениями.
-- 31 день неактивности → отключение + финальное письмо
-- 24 дня → предупреждение (если ещё не отправлено)
-- Индивидуальный дедлайн → только финальное письмо
-- Whitelist сохраняется, но пуст по умолчанию
+Production-версия: использует ldapsearch через subprocess для 100% совместимости с Windows AD.
 """
 import sys
 import os
 import re
 import pytz
+import subprocess
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from ldap3 import Server, Connection, SUBTREE, MODIFY_DELETE, SIMPLE
-from ldap3.utils.conv import escape_filter_chars
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import Config
@@ -22,14 +19,77 @@ from utils.email import send_email
 
 tz = pytz.timezone(Config.TIMEZONE)
 
-def get_ad_connection():
-    server = Server(Config.LDAP_SERVER, get_info=None)
-    conn = Connection(server, user=Config.LDAP_BIND_DN, password=Config.LDAP_BIND_PASSWORD,
-                      authentication=SIMPLE, auto_bind=False)
-    if not conn.bind():
-        print(f"[ERROR] AD bind failed: {conn.result}")
-        sys.exit(1)
-    return conn
+
+def ldapsearch_user(username):
+    """Ищет пользователя в AD через ldapsearch. Возвращает {dn, mail} или None."""
+    safe_user = re.sub(r'[*()\\\x00]', '', username)
+    
+    # 🔥 Убрали -Q, добавили -D и -w для простого бинда под сервисной учёткой
+    cmd = [
+        'ldapsearch', '-x', '-LLL',
+        '-H', Config.LDAP_SERVER,
+        '-D', Config.LDAP_BIND_DN,
+        '-w', Config.LDAP_BIND_PASSWORD,
+        '-b', Config.LDAP_BASE_DN,
+        f'(&(objectClass=user)(sAMAccountName={safe_user}))',
+        'distinguishedName', 'mail'
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
+        if result.returncode != 0:
+            # Фолбэк: пробуем без objectClass=user
+            cmd[-2] = f'(sAMAccountName={safe_user})'
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        dn = mail = None
+        for line in result.stdout.splitlines():
+            if line.startswith('distinguishedName:'):
+                dn = line.split(':', 1)[1].strip()
+            elif line.startswith('mail:'):
+                mail = line.split(':', 1)[1].strip()
+        return {'dn': dn, 'mail': mail} if dn else None
+    except Exception as e:
+        print(f"  ⚠️ ldapsearch error for {username}: {e}")
+        return None
+
+def ldapsearch_check_group_membership(user_dn, group_dn):
+    """Проверяет, состоит ли user_dn в группе через ldapsearch."""
+    safe_dn = re.sub(r'[,=*()\\\x00]', r'\\\g<0>', user_dn)
+    cmd = [
+        'ldapsearch', '-x', '-LLL', '-Q',
+        '-H', Config.LDAP_SERVER,
+        '-b', group_dn,
+        f'(member={safe_dn})',
+        'member'
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
+        return result.returncode == 0 and 'member:' in result.stdout
+    except Exception as e:
+        print(f"  ⚠️ ldapsearch group check error: {e}")
+        return False
+
+def ldapsearch_remove_from_group(user_dn, group_dn):
+    """Удаляет пользователя из группы через ldapmodify."""
+    safe_dn = re.sub(r'[,=*()\\\x00]', r'\\\g<0>', user_dn)
+    ldif = f"""dn: {group_dn}
+changetype: modify
+delete: member
+member: {safe_dn}
+"""
+    cmd = [
+        'ldapmodify', '-x', '-Q',
+        '-H', Config.LDAP_SERVER,
+        '-D', Config.LDAP_BIND_DN,
+        '-w', Config.LDAP_BIND_PASSWORD
+    ]
+    try:
+        result = subprocess.run(cmd, input=ldif, text=True, capture_output=True, timeout=10, check=False)
+        return result.returncode == 0
+    except Exception as e:
+        print(f"  ⚠️ ldapmodify error: {e}")
+        return False
 
 def get_db_connection():
     db_cfg = Config.MYSQL_CONFIG.copy()
@@ -38,12 +98,11 @@ def get_db_connection():
     return pymysql.connect(**db_cfg, cursorclass=cursor_class)
 
 def sync_ad():
-    conn = get_db_connection()
-    ad_conn = get_ad_connection()
-    cur = conn.cursor()
+    conn_db = get_db_connection()
+    cur = conn_db.cursor()
 
-    cutoff_warning = datetime.now(tz) - timedelta(days=Config.VPN_INACTIVE_DAYS - 7)  # 24 дня
-    cutoff_remove = datetime.now(tz) - timedelta(days=Config.VPN_INACTIVE_DAYS)      # 31 день
+    cutoff_warning = datetime.now(tz) - timedelta(days=Config.VPN_INACTIVE_DAYS - 7)
+    cutoff_remove = datetime.now(tz) - timedelta(days=Config.VPN_INACTIVE_DAYS)
     
     cur.execute("""
         SELECT u.samaccountname, u.last_active, u.ad_status, u.ad_group_state, 
@@ -54,111 +113,97 @@ def sync_ad():
     users = cur.fetchall()
     print(f"[DB] Loaded {len(users)} users")
 
+    success_count = 0
+    skip_count = 0
+    error_count = 0
     actions_log = []
 
-    for user in users:
+    for idx, user in enumerate(users, 1):
         username = user['samaccountname']
-        ad_status = user['ad_status'] or 'active'
-        last_active = user['last_active']
-        custom_deadline = user['custom_deadline']
-        warned_at = user['warned_at']
-        disconnected_at = user['disconnected_at']
-
-        # Пропускаем удалённых и готовящихся к удалению
-        if ad_status in ('deleted', 'before_delete', 'disabled'):
-            continue
-
-        # === Нормализация timezone (явная, без цикла) ===
-        if last_active and last_active.tzinfo is None:
-            last_active = tz.localize(last_active)
-        if custom_deadline and custom_deadline.tzinfo is None:
-            custom_deadline = tz.localize(custom_deadline)
-        if warned_at and warned_at.tzinfo is None:
-            warned_at = tz.localize(warned_at)
-        if disconnected_at and disconnected_at.tzinfo is None:
-            disconnected_at = tz.localize(disconnected_at)
-
-        # === Получаем DN и email из AD ===
-        safe_user = escape_filter_chars(username)
         try:
-            ad_conn.search(
-                search_base=Config.LDAP_BASE_DN,
-                search_filter=f'(&(objectClass=user)(sAMAccountName={safe_user}))',
-                search_scope=SUBTREE,
-                attributes=['distinguishedName', 'mail']
-            )
-        except Exception as ldap_err:
-            print(f"[WARN] LDAP search for {username} failed: {ldap_err}")
-            continue
-        if not ad_conn.entries:
-            continue
-            
-        user_dn = str(ad_conn.entries[0].distinguishedName)
-        user_email = str(ad_conn.entries[0].mail) if ad_conn.entries[0].mail else None
+            ad_status = user['ad_status'] or 'active'
+            last_active = user['last_active']
+            custom_deadline = user['custom_deadline']
+            warned_at = user['warned_at']
+            disconnected_at = user['disconnected_at']
 
-        # === ЛОГИКА ===
-        # 1. Whitelist
-        if username in Config.VPN_WHITELIST or re.match(Config.ADMIN_USERNAME_PATTERN, username):
-            continue
+            if ad_status in ('deleted', 'before_delete', 'disabled'):
+                skip_count += 1
+                continue
 
-        # 2. Индивидуальный дедлайн → только финальное письмо
-        if custom_deadline:
-            if custom_deadline <= datetime.now(tz) and not disconnected_at:
-                recipient = Config.EMAIL_TEST_OVERRIDE or user_email
-                if Config.EMAIL_TEST_OVERRIDE:
-                    print(f"[TEST MODE] Deadline email: {user_email} → {recipient}")
-                    
-                if send_email(recipient, "Ваш доступ к VPN отключён",
-                              f"Уважаемый {username},\n\nВаш доступ к корпоративной VPN был отключён в связи с истечением индивидуального срока действия.\n\nЕсли доступ вам ещё требуется, обратитесь в службу поддержки."):
-                    cur.execute("UPDATE vpn_users SET disconnected_at=NOW() WHERE samaccountname=%s", (username,))
-                    actions_log.append(f"[EMAIL+REMOVE] {username} (deadline)")
-            continue
+            # Нормализация timezone
+            if last_active and last_active.tzinfo is None: last_active = tz.localize(last_active)
+            if custom_deadline and custom_deadline.tzinfo is None: custom_deadline = tz.localize(custom_deadline)
+            if warned_at and warned_at.tzinfo is None: warned_at = tz.localize(warned_at)
+            if disconnected_at and disconnected_at.tzinfo is None: disconnected_at = tz.localize(disconnected_at)
 
-        # 3. Стандартная логика
-        if last_active:
-            # Предупреждение за 7 дней (24 дня неактивности)
-            if last_active <= cutoff_warning and not warned_at:
-                recipient = Config.EMAIL_TEST_OVERRIDE or user_email
-                if Config.EMAIL_TEST_OVERRIDE:
-                    print(f"[TEST MODE] Warning email: {user_email} → {recipient}")
-                    
-                if send_email(recipient, "Внимание: ваш доступ к VPN скоро будет отключён",
-                              f"Уважаемый {username},\n\nВы не подключались к VPN более 24 дней. Если вы не проявите активность в ближайшие 7 дней, доступ будет автоматически отключён."):
-                    cur.execute("UPDATE vpn_users SET warned_at=NOW() WHERE samaccountname=%s", (username,))
-                    actions_log.append(f"[WARN EMAIL] {username}")
-
-            # Отключение (31 день неактивности)
-            if last_active <= cutoff_remove and not disconnected_at:
-                recipient = Config.EMAIL_TEST_OVERRIDE or user_email
-                if Config.EMAIL_TEST_OVERRIDE:
-                    print(f"[TEST MODE] Disconnect email: {user_email} → {recipient}")
-                    
-                if send_email(recipient, "Ваш доступ к VPN отключён",
-                              f"Уважаемый {username},\n\nВаш доступ к VPN отключён в связи с отсутствием активности за последние 31 день.\n\nДля восстановления обратитесь в IT-отдел."):
-                    cur.execute("UPDATE vpn_users SET disconnected_at=NOW() WHERE samaccountname=%s", (username,))
-                    actions_log.append(f"[EMAIL+REMOVE] {username}")
+            # 🔍 Поиск в AD через ldapsearch
+            ad_info = ldapsearch_user(username)
+            if not ad_info or not ad_info['dn']:
+                skip_count += 1
+                continue
                 
-                # Удаление из группы AD (только если DRY_RUN выключен)
-                if not Config.DRY_RUN and Config.VPN_GROUP_DN and user_dn:
-                    try:
-                        ad_conn.search(Config.VPN_GROUP_DN, f'(member={escape_filter_chars(user_dn)})', SUBTREE, attributes=['member'])
-                        if ad_conn.entries:
-                            ad_conn.modify(Config.VPN_GROUP_DN, {'member': [(MODIFY_DELETE, [user_dn])]})
-                            if ad_conn.result['result'] == 0:
-                                actions_log[-1] += " + AD removed"
-                    except Exception as e:
-                        actions_log.append(f"[AD_ERROR] {username}: {e}")
+            user_dn = ad_info['dn']
+            user_email = ad_info['mail']
 
+            if username in Config.VPN_WHITELIST or re.match(Config.ADMIN_USERNAME_PATTERN, username):
+                skip_count += 1
+                continue
 
-    # Финализация
-    conn.commit()
-    cur.close(); conn.close()
-    ad_conn.unbind()
+            recipient = Config.EMAIL_TEST_OVERRIDE or user_email
 
-    print("\n[SUMMARY] Actions performed:")
-    for line in actions_log:
-        print(f"  • {line}")
-    print(f"\n[SUMMARY] Total: {len(actions_log)} operations. DRY_RUN={Config.DRY_RUN}")
+            # 1. Индивидуальный дедлайн
+            if custom_deadline:
+                if custom_deadline <= datetime.now(tz) and not disconnected_at:
+                    if send_email(recipient, "Ваш доступ к VPN отключён",
+                                  f"Уважаемый {username},\n\nВаш доступ отключён в связи с истечением индивидуального срока действия."):
+                        cur.execute("UPDATE vpn_users SET disconnected_at=NOW() WHERE samaccountname=%s", (username,))
+                        actions_log.append(f"[EMAIL+REMOVE] {username} (deadline) -> {recipient}")
+                    else:
+                        actions_log.append(f"[EMAIL_FAIL] {username}")
+                success_count += 1
+                continue
+
+            # 2. Стандартная логика
+            if last_active:
+                if last_active <= cutoff_warning and not warned_at:
+                    if send_email(recipient, "Внимание: ваш доступ к VPN скоро будет отключён",
+                                  f"Уважаемый {username},\n\nВы не подключались к VPN более 24 дней. Подключитесь для сохранения доступа."):
+                        cur.execute("UPDATE vpn_users SET warned_at=NOW() WHERE samaccountname=%s", (username,))
+                        actions_log.append(f"[WARN EMAIL] {username} -> {recipient}")
+
+                if last_active <= cutoff_remove and not disconnected_at:
+                    if send_email(recipient, "Ваш доступ к VPN отключён",
+                                  f"Уважаемый {username},\n\nВаш доступ отключён в связи с отсутствием активности за последние 31 день."):
+                        cur.execute("UPDATE vpn_users SET disconnected_at=NOW() WHERE samaccountname=%s", (username,))
+                        actions_log.append(f"[EMAIL+REMOVE] {username} -> {recipient}")
+
+                        # 🔥 Удаление из группы через ldapmodify
+                        if not Config.DRY_RUN and Config.VPN_GROUP_DN and user_dn:
+                            if ldapsearch_check_group_membership(user_dn, Config.VPN_GROUP_DN):
+                                if ldapsearch_remove_from_group(user_dn, Config.VPN_GROUP_DN):
+                                    actions_log[-1] += " + AD removed"
+                                else:
+                                    actions_log.append(f"[AD_ERROR] {username}: ldapmodify failed")
+            success_count += 1
+
+        except Exception as e:
+            error_count += 1
+            print(f"  ⚠️ Ошибка обработки {username}: {e}")
+            continue
+
+    conn_db.commit()
+    cur.close(); conn_db.close()
+
+    print("\n" + "="*60)
+    print(f"[SUMMARY] Processed: {success_count} OK | {skip_count} SKIPPED | {error_count} ERRORS")
+    print(f"  Actions logged: {len(actions_log)}")
+    print(f"  DRY_RUN: {Config.DRY_RUN}")
+    print("="*60)
+    if actions_log:
+        print("DETAILS:")
+        for line in actions_log:
+            print(f"  • {line}")
 
 if __name__ == "__main__":
     sync_ad()

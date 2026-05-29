@@ -10,6 +10,9 @@
         body { font-family: system-ui, -apple-system, sans-serif; }
         .clickable-username { cursor: pointer; color: #0d6efd; text-decoration: none; }
         .clickable-username:hover { text-decoration: underline; }
+        tr[data-user-state="historical"],
+        tr[data-ad-status="deleted"],
+        tr[data-ad-status="before_delete"] { display: none; }
     </style>
 
 <!-- Верхняя панель с пользователем и выходом -->
@@ -23,6 +26,7 @@
                     <span class="badge bg-{{ 'danger' if current_role == 'admin' else 'info' }}">{{ current_role }}</span>
                 {% endif %}
             </span>
+            <a href="{{ url_for('static', filename='docs/README.md') }}" target="_blank" class="btn btn-outline-secondary btn-sm">💡 Документация</a>
             <a href="/access" class="btn btn-outline-secondary btn-sm">🔐 Доступ</a>
             <a href="/settings" class="btn btn-outline-secondary btn-sm">⚙️ Настройки</a>
             <a href="/logout" class="btn btn-outline-secondary btn-sm">🚪 Выход</a>
@@ -78,8 +82,8 @@
         <!-- Заполняется JS -->
     </div>
 
-    <button id="toggleDeletedBtn" class="btn btn-sm btn-outline-secondary mb-3">
-        👁 Показать/Скрыть уволенных
+    <button id="toggleHiddenBtn" class="btn btn-sm btn-outline-info mb-3" data-visible="false">
+        📜 Показать скрытых
     </button>
 
     <!-- Таблица пользователей -->
@@ -99,7 +103,8 @@
                 </thead>
                 <tbody id="usersTable">
                     {% for u in users %}
-                    <tr {% if u.ad_status in ['deleted', 'before_delete'] %}data-ad-status="{{ u.ad_status }}"{% endif %}>
+                    <tr {% if u.ad_status in ['deleted', 'before_delete'] %}data-ad-status="{{ u.ad_status }}"{% endif %}
+                        {% if u.ad_group_state != 'in_group' %}data-user-state="historical"{% endif %}>
                         <td>
                             <strong class="clickable-username" onclick="openUserDetails('{{ u.samaccountname }}')">
                                 {{ u.samaccountname }}
@@ -119,7 +124,7 @@
                                    title="Белый список: исключить из автоотключения">
                         </td>
 
-                        <td>{{ u.last_active.strftime('%Y-%m-%d %H:%M') if u.last_active else 'Нет данных' }}</td>
+                        <td>{{ u.last_active.strftime('%d.%m.%Y %H:%M') if u.last_active else 'Нет данных' }}</td>
                         <td>
                             <span class="badge bg-{{ 'success' if u.ad_group_state == 'in_group' else 'secondary' }}">
                                 {{ u.ad_group_state }}
@@ -128,7 +133,7 @@
                         <td>
                             {% if u.custom_deadline %}
                                 {# Персональный дедлайн #}
-                                <span class="text-warning fw-bold">{{ u.custom_deadline.strftime('%Y-%m-%d %H:%M') }}</span>
+                                <span class="text-warning fw-bold">{{ u.custom_deadline.strftime('%d.%m.%Y %H:%M') }}</span>
                                 {% if u.custom_deadline.replace(tzinfo=None) < now %}
                                     <span class="badge bg-danger ms-1">ИСТЁК</span>
                                 {% else %}
@@ -283,7 +288,7 @@ async function openUserDetails(username) {
     const stats = await statsRes.json();
     document.getElementById('statsBody').innerHTML = stats.map(s => `
         <tr>
-            <td>${s.month}</td>
+            <td>${s.month ? s.month.split('-').reverse().join('.') : ''}</td>
             <td>${s.sessions}</td>
             <td>${s.hours} ч</td>
             <td>${s.sessions > 0 ? (s.hours / s.sessions).toFixed(1) : 0} ч</td>
@@ -295,8 +300,8 @@ async function openUserDetails(username) {
     const recent = await recentRes.json();
     document.getElementById('recentBody').innerHTML = recent.map(r => `
         <tr>
-            <td>${r.start}</td>
-            <td>${r.end}</td>
+            <td>${formatDateRU(r.start)}</td>
+            <td>${formatDateRU(r.end)}</td>
             <td>${r.duration_min}</td>
             <td>${r.src_ip}</td>
             <td>${r.vpn_ip || '-'}</td>
@@ -368,6 +373,97 @@ document.getElementById('toggleDeletedBtn').addEventListener('click', function()
 });
 </script>
 
+<script>
+// Форматирование даты в русскую локаль: 07.05.2026 14:30
+function formatDateRU(isoStr) {
+    if (!isoStr) return 'Нет данных';
+    const d = new Date(isoStr);
+    return d.toLocaleString('ru-RU', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+    });
+}
+
+// Универсальная кнопка: показывает/скрывает всех скрытых пользователей
+document.getElementById('toggleHiddenBtn').addEventListener('click', function() {
+    const btn = this;
+    // Селектор: все строки, которые должны быть скрыты по умолчанию
+    const rows = document.querySelectorAll(
+        'tr[data-ad-status="deleted"], ' +
+        'tr[data-ad-status="before_delete"], ' +
+        'tr[data-user-state="historical"]'
+    );
+    
+    // Читаем состояние из data-атрибута кнопки
+    const isVisible = btn.dataset.visible === 'true';
+    
+    // Переключаем видимость
+    rows.forEach(row => {
+        row.style.display = isVisible ? 'none' : 'table-row';
+    });
+    
+    // Обновляем состояние кнопки и текст
+    btn.dataset.visible = String(!isVisible);
+    btn.textContent = isVisible ? '📜 Показать скрытых' : '📜 Скрыть скрытых';
+});
+
+</script>
+
+<!-- 📄 Локальный MD-рендерер (только для файлов .md) -->
+<script>
+if (window.location.pathname.endsWith('.md')) {
+    // 1. Подключаем локальный marked.js (абсолютный путь, т.к. static раздаётся напрямую)
+    const mdScript = document.createElement('script');
+    mdScript.src = "/static/js/marked.min.js";
+    
+    mdScript.onload = () => {
+        // 2. Загружаем и рендерим markdown
+        fetch(window.location.pathname)
+            .then(r => r.text())
+            .then(md => {
+                document.body.innerHTML = `
+                    <div style="max-width:900px;margin:30px auto;padding:25px;
+                                font-family:system-ui,-apple-system,sans-serif;
+                                line-height:1.6;color:#24292e;background:#fff;
+                                border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
+                        <style>
+                            h1,h2,h3 { border-bottom:1px solid #eaecef; padding-bottom:0.3em; margin-top:1.5em; }
+                            code { background:#f6f8fa; padding:0.2em 0.4em; border-radius:3px; font-family:monospace; }
+                            pre { background:#f6f8fa; padding:16px; border-radius:6px; overflow:auto; }
+                            pre code { background:none; padding:0; }
+                            blockquote { border-left:4px solid #dfe2e5; padding:0 1em; color:#6a737d; margin:1em 0; }
+                            table { border-collapse:collapse; width:100%; margin:1em 0; }
+                            th,td { border:1px solid #dfe2e5; padding:8px 12px; text-align:left; }
+                            th { background:#f6f8fa; font-weight:600; }
+                            a { color:#0366d6; text-decoration:none; }
+                            a:hover { text-decoration:underline; }
+                            ul,ol { padding-left:2em; }
+                            img { max-width:100%; }
+                        </style>
+                        ${marked.parse(md)}
+                    </div>`;
+                // 3. Фикс ссылок
+                document.querySelectorAll('a').forEach(a => {
+                    if (a.hostname === location.hostname || a.href.startsWith('/')) {
+                        a.target = '_self';
+                    }
+                });
+            })
+            .catch(err => {
+                document.body.innerHTML = `<div style="padding:40px;text-align:center;color:#cb2431;">
+                    ❌ Не удалось загрузить документацию: ${err.message}
+                </div>`;
+            });
+    };
+    
+    // Если marked уже загружен — рендерим сразу
+    if (typeof marked !== 'undefined') {
+        mdScript.onload();
+    } else {
+        document.head.appendChild(mdScript);
+    }
+}
+</script>
 
 </body>
 </html>

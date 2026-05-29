@@ -1,18 +1,13 @@
-# Secrets
+# Secrets & Env
 .env
 .env.local
-*.key
-*.pem
-*.secret
 
 # Runtime
 logs/
 sessions/
+*.csv
 __pycache__/
 *.pyc
-*.egg-info/
-dist/
-build/
 venv/
 .venv/
 
@@ -21,4 +16,3 @@ venv/
 Thumbs.db
 .idea/
 .vscode/
-*.swp

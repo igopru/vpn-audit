@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  # База данных MySQL
+  db:
+    image: mysql:8.0
+    container_name: vpn_audit_db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password_change_me
+      MYSQL_DATABASE: vpn_audit
+      MYSQL_USER: vpn_audit
+      MYSQL_PASSWORD: db_password_change_me
+    volumes:
+      - ./data/mysql:/var/lib/mysql # Храним базу на диске хоста
+    ports:
+      - "3306:3306" # Опционально, если нужен доступ извне
+    networks:
+      - vpn_net
+
+  # Приложение Flask
+  app:
+    build: .
+    container_name: vpn_audit_app
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      # Подключаем переменные из .env файла на хосте
+      DB_HOST: db 
+      DB_USER: vpn_audit
+      DB_PASSWORD: db_password_change_me
+      DB_NAME: vpn_audit
+      
+      AUTH_AD_SERVER: ldap://dc4.baltkam.ru
+      AUTH_AD_BIND_DN: CN=svc_vpn_audit,CN=Users,DC=baltkam,DC=ru
+      AUTH_AD_BIND_PASSWORD: put_real_password_here
+      
+      SECRET_KEY: my_super_secret_key
+    volumes:
+      # 🔥 ВАЖНО: Монтируем папку логов хоста в контейнер
+      # Rsyslog пишет на хост, а парсер читает внутри контейнера
+      - ./logs:/app/logs:ro 
+      - ./sessions:/app/sessions
+    ports:
+      - "8000:8000"
+    networks:
+      - vpn_net
+
+  # Cron-парсер (опционально, можно запускать через docker entrypoint)
+  # В данном примере парсер лучше запускать разово или через отдельный cron
+  # Но для простоты, вы можете выполнять: docker exec vpn_audit_app python parser.py
+
+networks:
+  vpn_net:
+    driver: bridge

@@ -1,0 +1,31 @@
+ASA → Syslog/TFTP → /opt/vpn-audit/logs/asa.log
+                      ↓
+              parser.py (cron 02:00)
+                      ↓
+              MySQL: vpn_sessions → vpn_users
+                      ↓
+              ad_sync.py (dry-run → prod)
+                      ↓
+              Flask + Gunicorn → Dashboard / Отчёты / Ручное управление
+                      ↓
+              SMTP / Telegram → Уведомления
+
+/opt/vpn-audit/
+├── .env                    # секреты (в .gitignore!)
+├── .env.example           # шаблон
+├── config.py              # конфиг-класс
+├── requirements.txt       # зависимости
+├── parser.py              # парсер логов
+├── ad_sync.py             # синхронизация AD
+├── app.py                 # Flask-дашборд
+├── utils/
+│   ├── __init__.py
+│   └── email.py           # отправка почты
+├── templates/
+│   └── index.html         # дашборд (Bootstrap)
+├── logs/                  # входные логи ASA
+├── systemd/
+│   ├── vpn-audit-parser.service
+│   └── vpn-audit-web.service
+└── nginx/
+    └── vpn-audit.conf     # reverse proxy конфиг
