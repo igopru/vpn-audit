@@ -26,22 +26,30 @@
 # Clone & enter
 git clone https://github.com/igopru/vpn-audit.git
 cd vpn-audit
-
+````
 # Virtual environment
+```bash
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+```
 
 # Configure secrets
+```bash
 cp .env.example .env
 chmod 600 .env
 nano .env  # ← Fill in your DB, LDAP, SMTP settings
+```
 
 # Create database
+```bash
 mysql -u root -p < docs/schema.sql
+```
 
 # Initial parse (if historical logs exist)
+```bash
 python parser.py
+```
 
 # 3. Automation (Cron)
 
