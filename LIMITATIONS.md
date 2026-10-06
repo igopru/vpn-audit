@@ -136,8 +136,6 @@ VPN Audit System создана для **аудита информационно
 
 - [README.md](README.md) — описание возможностей системы
 - [ARCHITECTURE.md](architecture.txt) — техническая архитектура
-- [CONTRIBUTING.md](CONTRIBUTING.md) — как вносить изменения
-- [SECURITY.md](SECURITY.md) — политика безопасности
 
 ---
 
